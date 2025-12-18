@@ -12,10 +12,51 @@ MONTHS = {
     "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12
 }
 
+# -----------------------------
+# Easter calculation (Gregorian)
+# -----------------------------
+def easter_date(year):
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = ((h + l - 7 * m + 114) % 31) + 1
+    return date(year, month, day)
+
+# -----------------------------
+# Super Bowl Sunday
+# First Sunday of February
+# -----------------------------
+def super_bowl_sunday(year):
+    d = date(year, 2, 1)
+
+    # Find first Sunday
+    while d.weekday() != 6:
+        d += timedelta(days=1)
+
+    # Second Sunday = first Sunday + 7 days
+    return d + timedelta(days=7)
+
+
+
 def is_holiday(d):
     year = d.year
 
-    if (d.month, d.day) in [(1, 1), (7, 4), (12, 25)]:
+    # Fixed-date holidays
+    if (d.month, d.day) in [
+        (1, 1),    # New Year's Day
+        (7, 4),    # Independence Day
+        (12, 25),  # Christmas
+    ]:
         return True
 
     # Memorial Day: last Monday of May
@@ -36,7 +77,14 @@ def is_holiday(d):
         if d.day == thursdays[3]:
             return True
 
-    # Easter + Super Bowl Sunday can be added later
+    # Easter
+    if d == easter_date(year):
+        return True
+
+    # Super Bowl Sunday
+    if d == super_bowl_sunday(year):
+        return True
+
     return False
 
 
@@ -50,51 +98,39 @@ def index():
         lines = text.splitlines()
 
         # -------------------------
-        # 1️⃣ BASE TCRD (ORIGINAL, CORRECT LOGIC)
+        # Base TCRD (known-good)
         # -------------------------
-        tcrd_matches = re.findall(r'TCRD\D*(\d{4})', text, re.IGNORECASE)
-        for t in tcrd_matches:
-            hrs = int(t[:2])
-            mins = int(t[2:])
-            base_minutes += hrs * 60 + mins
+        matches = re.findall(r'TCRD\D*(\d{4})', text, re.IGNORECASE)
+        for t in matches:
+            base_minutes += int(t[:2]) * 60 + int(t[2:])
 
         # -------------------------
-        # 2️⃣ HOLIDAY BONUS (SEPARATE LOGIC)
+        # Holiday bonus (separate)
         # -------------------------
         year = 2026  # PERIOD 0126
-        holiday_dates_with_flying = set()
+        holiday_dates = set()
         current_date = None
-        saw_flying_after_date = False
+        saw_flying = False
 
         for line in lines:
-            # Detect calendar date
             m = re.search(
                 r'(\d{2})\s+(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)',
                 line
             )
             if m:
-                # If previous date had flying and was a holiday, count it
-                if current_date and saw_flying_after_date and is_holiday(current_date):
-                    holiday_dates_with_flying.add(current_date)
+                if current_date and saw_flying and is_holiday(current_date):
+                    holiday_dates.add(current_date)
 
-                day = int(m.group(1))
-                month = MONTHS[m.group(2)]
-                current_date = date(year, month, day)
-                saw_flying_after_date = False
+                current_date = date(year, MONTHS[m.group(2)], int(m.group(1)))
+                saw_flying = False
 
-            # OFF cancels flying for that date
-            if "OFF" in line:
-                saw_flying_after_date = False
+            if "TCRD" in line.upper():
+                saw_flying = True
 
-            # Any TCRD means flying happened
-            if re.search(r'TCRD\D*\d{4}', line, re.IGNORECASE):
-                saw_flying_after_date = True
+        if current_date and saw_flying and is_holiday(current_date):
+            holiday_dates.add(current_date)
 
-        # Catch last date
-        if current_date and saw_flying_after_date and is_holiday(current_date):
-            holiday_dates_with_flying.add(current_date)
-
-        holiday_minutes = len(holiday_dates_with_flying) * HOLIDAY_BONUS_MINUTES
+        holiday_minutes = len(holiday_dates) * HOLIDAY_BONUS_MINUTES
 
     total_minutes = base_minutes + holiday_minutes
 
