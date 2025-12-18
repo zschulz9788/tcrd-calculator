@@ -6,15 +6,18 @@
   <form method="post">
     <textarea name="schedule_text"
               rows="15"
-              cols="60"
+              cols="70"
               placeholder="Paste your schedule text here..."
               required></textarea>
     <br><br>
     <button type="submit">Calculate Trip Credit</button>
   </form>
 
-  {% if result %}
-    <h3>Total Trip Credit: {{ result }}</h3>
+  {% if total %}
+    <hr>
+    <p><strong>Base TCRD:</strong> {{ base }}</p>
+    <p><strong>Holiday Bonus:</strong> {{ holiday }}</p>
+    <p><strong>Total Trip Credit:</strong> {{ total }}</p>
   {% endif %}
 </body>
 </html>
