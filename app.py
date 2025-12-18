@@ -15,7 +15,6 @@ MONTHS = {
 def is_holiday(d):
     year = d.year
 
-    # Fixed holidays
     if (d.month, d.day) in [(1, 1), (7, 4), (12, 25)]:
         return True
 
@@ -37,7 +36,7 @@ def is_holiday(d):
         if d.day == thursdays[3]:
             return True
 
-    # (Easter & Super Bowl can be added later)
+    # Easter + Super Bowl Sunday can be added later
     return False
 
 
@@ -50,35 +49,52 @@ def index():
         text = request.form.get("schedule_text", "")
         lines = text.splitlines()
 
+        # -------------------------
+        # 1️⃣ BASE TCRD (ORIGINAL, CORRECT LOGIC)
+        # -------------------------
+        tcrd_matches = re.findall(r'TCRD\D*(\d{4})', text, re.IGNORECASE)
+        for t in tcrd_matches:
+            hrs = int(t[:2])
+            mins = int(t[2:])
+            base_minutes += hrs * 60 + mins
+
+        # -------------------------
+        # 2️⃣ HOLIDAY BONUS (SEPARATE LOGIC)
+        # -------------------------
         year = 2026  # PERIOD 0126
-        last_date = None
-        holiday_dates_used = set()
+        holiday_dates_with_flying = set()
+        current_date = None
+        saw_flying_after_date = False
 
         for line in lines:
-            # Find ALL dates in the line (because of 2-column layout)
-            for m in re.finditer(
+            # Detect calendar date
+            m = re.search(
                 r'(\d{2})\s+(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)',
                 line
-            ):
+            )
+            if m:
+                # If previous date had flying and was a holiday, count it
+                if current_date and saw_flying_after_date and is_holiday(current_date):
+                    holiday_dates_with_flying.add(current_date)
+
                 day = int(m.group(1))
                 month = MONTHS[m.group(2)]
-                last_date = date(year, month, day)
+                current_date = date(year, month, day)
+                saw_flying_after_date = False
 
-            # Find TCRD
-            tcrd_match = re.search(r'TCRD\D*(\d{4})', line, re.IGNORECASE)
-            if tcrd_match and last_date:
-                hrs = int(tcrd_match.group(1)[:2])
-                mins = int(tcrd_match.group(1)[2:])
-                minutes = hrs * 60 + mins
+            # OFF cancels flying for that date
+            if "OFF" in line:
+                saw_flying_after_date = False
 
-                base_minutes += minutes
+            # Any TCRD means flying happened
+            if re.search(r'TCRD\D*\d{4}', line, re.IGNORECASE):
+                saw_flying_after_date = True
 
-                # Holiday bonus once per calendar day
-                if is_holiday(last_date) and last_date not in holiday_dates_used:
-                    holiday_minutes += HOLIDAY_BONUS_MINUTES
-                    holiday_dates_used.add(last_date)
+        # Catch last date
+        if current_date and saw_flying_after_date and is_holiday(current_date):
+            holiday_dates_with_flying.add(current_date)
 
-                last_date = None  # move on to next day
+        holiday_minutes = len(holiday_dates_with_flying) * HOLIDAY_BONUS_MINUTES
 
     total_minutes = base_minutes + holiday_minutes
 
