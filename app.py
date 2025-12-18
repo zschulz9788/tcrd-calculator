@@ -4,7 +4,7 @@ from datetime import date, timedelta
 
 app = Flask(__name__)
 
-HOLIDAY_BONUS_MINUTES = 4 * 60 + 12  # 4:12 = 252 minutes
+HOLIDAY_BONUS_MINUTES = 4 * 60 + 12  # 252 minutes
 
 MONTHS = {
     "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4,
@@ -15,12 +15,8 @@ MONTHS = {
 def is_holiday(d):
     year = d.year
 
-    # Fixed-date holidays
-    if (d.month, d.day) in [
-        (1, 1),    # New Year's Day
-        (7, 4),    # Independence Day
-        (12, 25),  # Christmas
-    ]:
+    # Fixed holidays
+    if (d.month, d.day) in [(1, 1), (7, 4), (12, 25)]:
         return True
 
     # Memorial Day: last Monday of May
@@ -41,7 +37,7 @@ def is_holiday(d):
         if d.day == thursdays[3]:
             return True
 
-    # TODO: Easter, Super Bowl Sunday (can be added later)
+    # (Easter & Super Bowl can be added later)
     return False
 
 
@@ -49,47 +45,42 @@ def is_holiday(d):
 def index():
     base_minutes = 0
     holiday_minutes = 0
-    total_minutes = 0
 
     if request.method == "POST":
         text = request.form.get("schedule_text", "")
         lines = text.splitlines()
 
-        current_date = None
-        year = 2026  # from PERIOD 0126
+        year = 2026  # PERIOD 0126
+        last_date = None
+        holiday_dates_used = set()
 
         for line in lines:
-            # Detect date lines like "01 JAN"
-            date_match = re.search(
+            # Find ALL dates in the line (because of 2-column layout)
+            for m in re.finditer(
                 r'(\d{2})\s+(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)',
                 line
-            )
+            ):
+                day = int(m.group(1))
+                month = MONTHS[m.group(2)]
+                last_date = date(year, month, day)
 
-            if date_match:
-                day = int(date_match.group(1))
-                month = MONTHS[date_match.group(2)]
-                current_date = date(year, month, day)
-
-            # OFF day = ignore
-            if current_date and "OFF" in line:
-                current_date = None
-
-            # Detect TCRD
+            # Find TCRD
             tcrd_match = re.search(r'TCRD\D*(\d{4})', line, re.IGNORECASE)
-
-            if tcrd_match and current_date:
+            if tcrd_match and last_date:
                 hrs = int(tcrd_match.group(1)[:2])
                 mins = int(tcrd_match.group(1)[2:])
                 minutes = hrs * 60 + mins
 
                 base_minutes += minutes
 
-                if is_holiday(current_date):
+                # Holiday bonus once per calendar day
+                if is_holiday(last_date) and last_date not in holiday_dates_used:
                     holiday_minutes += HOLIDAY_BONUS_MINUTES
+                    holiday_dates_used.add(last_date)
 
-                current_date = None  # prevent double counting per day
+                last_date = None  # move on to next day
 
-        total_minutes = base_minutes + holiday_minutes
+    total_minutes = base_minutes + holiday_minutes
 
     return render_template(
         "index.html",
