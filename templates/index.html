@@ -3,8 +3,12 @@
 <body>
   <h2>Trip Credit Calculator</h2>
 
-  <form method="post" enctype="multipart/form-data">
-    <input type="file" name="pdf" accept="application/pdf" required>
+  <form method="post">
+    <textarea name="schedule_text"
+              rows="15"
+              cols="60"
+              placeholder="Paste your schedule text here..."
+              required></textarea>
     <br><br>
     <button type="submit">Calculate Trip Credit</button>
   </form>
