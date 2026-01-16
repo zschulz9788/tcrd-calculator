@@ -4,7 +4,7 @@ from datetime import date, timedelta
 
 app = Flask(__name__)
 
-HOLIDAY_BONUS_MINUTES = 4 * 60 + 12
+HOLIDAY_BONUS_MINUTES = 4 * 60 + 12  # 252 minutes
 
 MONTHS = {
     "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4,
@@ -12,9 +12,6 @@ MONTHS = {
     "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12
 }
 
-# -----------------------------
-# Easter
-# -----------------------------
 def easter_date(year):
     a = year % 19
     b = year // 100
@@ -32,50 +29,53 @@ def easter_date(year):
     day = ((h + l - 7 * m + 114) % 31) + 1
     return date(year, month, day)
 
-# -----------------------------
-# Super Bowl Sunday (2nd Sunday Feb)
-# -----------------------------
+# Super Bowl Sunday = SECOND Sunday of Feb
 def super_bowl_sunday(year):
     d = date(year, 2, 1)
-    while d.weekday() != 6:
+    while d.weekday() != 6:  # Sunday
         d += timedelta(days=1)
     return d + timedelta(days=7)
 
 def is_holiday(d):
     year = d.year
 
+    # Fixed-date holidays
     if (d.month, d.day) in [(1, 1), (7, 4), (12, 25)]:
         return True
 
+    # Memorial Day: last Monday of May
     if d.month == 5 and d.weekday() == 0 and d + timedelta(days=7) > date(year, 5, 31):
         return True
 
+    # Labor Day: first Monday of September
     if d.month == 9 and d.weekday() == 0 and d.day <= 7:
         return True
 
+    # Thanksgiving: fourth Thursday of November
     if d.month == 11 and d.weekday() == 3:
         thursdays = [x for x in range(1, 31) if date(year, 11, x).weekday() == 3]
         if d.day == thursdays[3]:
             return True
 
+    # Easter
     if d == easter_date(year):
         return True
 
+    # Super Bowl Sunday
     if d == super_bowl_sunday(year):
         return True
 
     return False
 
-
-def infer_year(text):
-    m = re.search(r'PERIOD\s+\d{2}(\d{2})', text)
-    return 2000 + int(m.group(1)) if m else 2026
-
+def infer_year(text, default_year=2026):
+    m = re.search(r'PERIOD\s+\d{2}(\d{2})', text, re.IGNORECASE)
+    return 2000 + int(m.group(1)) if m else default_year
 
 def split_columns(line):
-    parts = re.split(r"\s{8,}", line.rstrip(), maxsplit=1)
-    return parts[0], parts[1] if len(parts) > 1 else ""
-
+    parts = re.split(r"\s{8,}", line.rstrip("\n"), maxsplit=1)
+    left = parts[0] if len(parts) > 0 else ""
+    right = parts[1] if len(parts) > 1 else ""
+    return left, right
 
 def build_day_blocks(lines, year):
     blocks = {}
@@ -85,61 +85,68 @@ def build_day_blocks(lines, year):
 
     def process_column(col_lines):
         current_date = None
-        for line in col_lines:
+        for raw in col_lines:
+            line = raw.strip()
+            if not line:
+                continue
+
             dm = re.search(r'(\d{2})\s+(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)', line)
             if dm:
                 current_date = date(year, MONTHS[dm.group(2)], int(dm.group(1)))
-                push(current_date, line.strip())
+                push(current_date, line)
                 continue
-            if current_date:
-                push(current_date, line.strip())
 
-    left, right = [], []
+            if current_date:
+                push(current_date, line)
+
+    left_lines, right_lines = [], []
     for ln in lines:
         l, r = split_columns(ln)
-        if l.strip(): left.append(l)
-        if r.strip(): right.append(r)
+        if l.strip():
+            left_lines.append(l)
+        if r.strip():
+            right_lines.append(r)
 
-    process_column(left)
-    process_column(right)
+    process_column(left_lines)
+    process_column(right_lines)
+
     return blocks
-
 
 def pretty_blocks(blocks):
     out = []
     for d in sorted(blocks):
-        out.append(d.strftime("%d %b").upper())
+        out.append(d.strftime("%d %b").upper() + ":")
         for ln in blocks[d]:
             out.append(f"  {ln}")
         out.append("")
-    return "\n".join(out).strip()
-
+    return "\n".join(out).rstrip()
 
 @app.route("/", methods=["GET", "POST"])
 def index():
-    text = request.form.get("schedule_text", "")
-    action = request.form.get("action")
+    schedule_text = request.form.get("schedule_text", "")
+    action = request.form.get("action", "")
 
     base = holiday = total = normalized = ""
 
-    if text:
-        lines = text.splitlines()
-        year = infer_year(text)
+    if request.method == "POST" and schedule_text.strip():
+        lines = schedule_text.splitlines()
+        year = infer_year(schedule_text, default_year=2026)
 
+        # Always normalize (so Normalize button shows something, and Calculate can show it too)
         blocks = build_day_blocks(lines, year)
         normalized = pretty_blocks(blocks)
 
         if action == "calculate":
-            # Base TCRD
+            # Base TCRD (known-good, layout-agnostic)
             base_minutes = sum(
                 int(t[:2]) * 60 + int(t[2:])
-                for t in re.findall(r'TCRD\D*(\d{4})', text, re.IGNORECASE)
+                for t in re.findall(r'TCRD\D*(\d{4})', schedule_text, re.IGNORECASE)
             )
 
-            # Holiday bonus
+            # Holiday bonus = holiday day block that contains any TCRD
             holiday_days = 0
             for d, blines in blocks.items():
-                worked = any("TCRD" in ln.upper() for ln in blines)
+                worked = any(re.search(r'TCRD\D*\d{4}', ln, re.IGNORECASE) for ln in blines)
                 if worked and is_holiday(d):
                     holiday_days += 1
 
@@ -152,12 +159,12 @@ def index():
 
     return render_template(
         "index.html",
+        schedule_text=schedule_text,
+        normalized=normalized,
         base=base,
         holiday=holiday,
-        total=total,
-        normalized=normalized
+        total=total
     )
-
 
 if __name__ == "__main__":
     app.run()
