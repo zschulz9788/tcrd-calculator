@@ -8,21 +8,28 @@
               rows="16"
               cols="80"
               placeholder="Paste your schedule text here..."
-              required></textarea>
+              required>{{ request.form.schedule_text }}</textarea>
     <br><br>
-    <button type="submit">Calculate Trip Credit</button>
+
+    <button type="submit" name="action" value="normalize">
+      Normalize
+    </button>
+
+    <button type="submit" name="action" value="calculate">
+      Calculate
+    </button>
   </form>
 
-  {% if total and total != "0:00" %}
+  {% if normalized %}
+    <h3>Normalized Schedule (one day per block)</h3>
+    <pre style="white-space: pre-wrap; border:1px solid #ccc; padding:12px;">{{ normalized }}</pre>
+  {% endif %}
+
+  {% if total %}
     <hr>
     <p><strong>Base TCRD:</strong> {{ base }}</p>
     <p><strong>Holiday Bonus:</strong> {{ holiday }}</p>
     <p><strong>Total Trip Credit:</strong> {{ total }}</p>
-
-    <details style="margin-top: 18px;">
-      <summary><strong>Show normalized schedule (one block per day)</strong></summary>
-      <pre style="white-space: pre-wrap; border: 1px solid #ccc; padding: 12px; margin-top: 10px;">{{ normalized }}</pre>
-    </details>
   {% endif %}
 </body>
 </html>
