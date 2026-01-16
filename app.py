@@ -12,10 +12,28 @@ MONTHS = {
     "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12
 }
 
+TCRD_RE = re.compile(r"TCRD\D*(\d{4})", re.IGNORECASE)
+
+# Detect a calendar date like "08 FEB"
+DATE_RE = re.compile(
+    r'(\d{2})\s+(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\b',
+    re.IGNORECASE
+)
+
+# Detect an assigned pairing like "R7353"
+PAIRING_RE = re.compile(r"\bR\d{4}\b", re.IGNORECASE)
+
+
+def infer_year(text: str, default_year: int = 2026) -> int:
+    # Parses "PERIOD 0226" -> 2026
+    m = re.search(r"PERIOD\s+\d{2}(\d{2})", text, re.IGNORECASE)
+    return 2000 + int(m.group(1)) if m else default_year
+
+
 # -----------------------------
-# Easter calculation (Gregorian)
+# Holiday helpers
 # -----------------------------
-def easter_date(year):
+def easter_date(year: int) -> date:
     a = year % 19
     b = year // 100
     c = year % 100
@@ -32,37 +50,23 @@ def easter_date(year):
     day = ((h + l - 7 * m + 114) % 31) + 1
     return date(year, month, day)
 
-# -----------------------------
-# Super Bowl Sunday
-# First Sunday of February
-# -----------------------------
-def super_bowl_sunday(year):
+def super_bowl_sunday(year: int) -> date:
+    # SECOND Sunday of February (per your contract)
     d = date(year, 2, 1)
-
-    # Find first Sunday
-    while d.weekday() != 6:
+    while d.weekday() != 6:  # Sunday
         d += timedelta(days=1)
-
-    # Second Sunday = first Sunday + 7 days
     return d + timedelta(days=7)
 
-
-
-def is_holiday(d):
-    year = d.year
+def is_holiday(d: date) -> bool:
+    y = d.year
 
     # Fixed-date holidays
-    if (d.month, d.day) in [
-        (1, 1),    # New Year's Day
-        (7, 4),    # Independence Day
-        (12, 25),  # Christmas
-    ]:
+    if (d.month, d.day) in [(1, 1), (7, 4), (12, 25)]:
         return True
 
     # Memorial Day: last Monday of May
-    if d.month == 5 and d.weekday() == 0:
-        if d + timedelta(days=7) > date(year, 5, 31):
-            return True
+    if d.month == 5 and d.weekday() == 0 and (d + timedelta(days=7) > date(y, 5, 31)):
+        return True
 
     # Labor Day: first Monday of September
     if d.month == 9 and d.weekday() == 0 and d.day <= 7:
@@ -70,75 +74,82 @@ def is_holiday(d):
 
     # Thanksgiving: fourth Thursday of November
     if d.month == 11 and d.weekday() == 3:
-        thursdays = [
-            day for day in range(1, 31)
-            if date(year, 11, day).weekday() == 3
-        ]
+        thursdays = [x for x in range(1, 31) if date(y, 11, x).weekday() == 3]
         if d.day == thursdays[3]:
             return True
 
     # Easter
-    if d == easter_date(year):
+    if d == easter_date(y):
         return True
 
     # Super Bowl Sunday
-    if d == super_bowl_sunday(year):
+    if d == super_bowl_sunday(y):
         return True
 
     return False
 
 
+def fmt_hhmm(total_minutes: int) -> str:
+    return f"{total_minutes // 60}:{total_minutes % 60:02d}"
+
+
+def holiday_worked_days_from_text(text: str, year: int) -> set[date]:
+    """
+    Lightweight holiday worked-day detection:
+    - Scan lines for a date token (DD MON)
+    - If that same line contains OFF => not worked
+    - If that same line contains an assigned pairing (R####) => worked
+    This is robust for the day-list style where the assignment is on the date line.
+    """
+    worked_days = set()
+
+    for line in text.splitlines():
+        m = DATE_RE.search(line)
+        if not m:
+            continue
+
+        dd = int(m.group(1))
+        mon = MONTHS[m.group(2).upper()]
+        d = date(year, mon, dd)
+
+        upper = line.upper()
+        if "OFF" in upper:
+            continue
+
+        if PAIRING_RE.search(upper):
+            worked_days.add(d)
+
+    return worked_days
+
+
 @app.route("/", methods=["GET", "POST"])
 def index():
+    schedule_text = ""
     base_minutes = 0
     holiday_minutes = 0
+    total_minutes = 0
 
     if request.method == "POST":
-        text = request.form.get("schedule_text", "")
-        lines = text.splitlines()
+        schedule_text = request.form.get("schedule_text", "")
+        year = infer_year(schedule_text, default_year=2026)
 
-        # -------------------------
-        # Base TCRD (known-good)
-        # -------------------------
-        matches = re.findall(r'TCRD\D*(\d{4})', text, re.IGNORECASE)
-        for t in matches:
+        # Base TCRD: global scan (this is why it always totals correctly)
+        for t in TCRD_RE.findall(schedule_text):
             base_minutes += int(t[:2]) * 60 + int(t[2:])
 
-        # -------------------------
-        # Holiday bonus (separate)
-        # -------------------------
-        year = 2026  # PERIOD 0126
-        holiday_dates = set()
-        current_date = None
-        saw_flying = False
+        # Holiday bonus: determine which holiday dates were WORKED
+        worked_days = holiday_worked_days_from_text(schedule_text, year)
+        worked_holidays = {d for d in worked_days if is_holiday(d)}
 
-        for line in lines:
-            m = re.search(
-                r'(\d{2})\s+(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)',
-                line
-            )
-            if m:
-                if current_date and saw_flying and is_holiday(current_date):
-                    holiday_dates.add(current_date)
-
-                current_date = date(year, MONTHS[m.group(2)], int(m.group(1)))
-                saw_flying = False
-
-            if "TCRD" in line.upper():
-                saw_flying = True
-
-        if current_date and saw_flying and is_holiday(current_date):
-            holiday_dates.add(current_date)
-
-        holiday_minutes = len(holiday_dates) * HOLIDAY_BONUS_MINUTES
-
-    total_minutes = base_minutes + holiday_minutes
+        holiday_minutes = len(worked_holidays) * HOLIDAY_BONUS_MINUTES
+        total_minutes = base_minutes + holiday_minutes
 
     return render_template(
         "index.html",
-        base=f"{base_minutes // 60}:{base_minutes % 60:02d}",
-        holiday=f"{holiday_minutes // 60}:{holiday_minutes % 60:02d}",
-        total=f"{total_minutes // 60}:{total_minutes % 60:02d}"
+        schedule_text=schedule_text,
+        base=fmt_hhmm(base_minutes) if request.method == "POST" else "",
+        holiday=fmt_hhmm(holiday_minutes) if request.method == "POST" else "",
+        total=fmt_hhmm(total_minutes) if request.method == "POST" else "",
     )
 
 
