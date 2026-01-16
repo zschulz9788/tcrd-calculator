@@ -12,6 +12,9 @@ MONTHS = {
     "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12
 }
 
+# -----------------------------
+# Easter calculation (Gregorian)
+# -----------------------------
 def easter_date(year):
     a = year % 19
     b = year // 100
@@ -29,23 +32,37 @@ def easter_date(year):
     day = ((h + l - 7 * m + 114) % 31) + 1
     return date(year, month, day)
 
-# Super Bowl Sunday = SECOND Sunday of Feb
+# -----------------------------
+# Super Bowl Sunday
+# First Sunday of February
+# -----------------------------
 def super_bowl_sunday(year):
     d = date(year, 2, 1)
-    while d.weekday() != 6:  # Sunday
+
+    # Find first Sunday
+    while d.weekday() != 6:
         d += timedelta(days=1)
+
+    # Second Sunday = first Sunday + 7 days
     return d + timedelta(days=7)
+
+
 
 def is_holiday(d):
     year = d.year
 
     # Fixed-date holidays
-    if (d.month, d.day) in [(1, 1), (7, 4), (12, 25)]:
+    if (d.month, d.day) in [
+        (1, 1),    # New Year's Day
+        (7, 4),    # Independence Day
+        (12, 25),  # Christmas
+    ]:
         return True
 
     # Memorial Day: last Monday of May
-    if d.month == 5 and d.weekday() == 0 and d + timedelta(days=7) > date(year, 5, 31):
-        return True
+    if d.month == 5 and d.weekday() == 0:
+        if d + timedelta(days=7) > date(year, 5, 31):
+            return True
 
     # Labor Day: first Monday of September
     if d.month == 9 and d.weekday() == 0 and d.day <= 7:
@@ -53,7 +70,10 @@ def is_holiday(d):
 
     # Thanksgiving: fourth Thursday of November
     if d.month == 11 and d.weekday() == 3:
-        thursdays = [x for x in range(1, 31) if date(year, 11, x).weekday() == 3]
+        thursdays = [
+            day for day in range(1, 31)
+            if date(year, 11, day).weekday() == 3
+        ]
         if d.day == thursdays[3]:
             return True
 
@@ -67,104 +87,60 @@ def is_holiday(d):
 
     return False
 
-def infer_year(text, default_year=2026):
-    m = re.search(r'PERIOD\s+\d{2}(\d{2})', text, re.IGNORECASE)
-    return 2000 + int(m.group(1)) if m else default_year
-
-def split_columns(line):
-    parts = re.split(r"\s{8,}", line.rstrip("\n"), maxsplit=1)
-    left = parts[0] if len(parts) > 0 else ""
-    right = parts[1] if len(parts) > 1 else ""
-    return left, right
-
-def build_day_blocks(lines, year):
-    blocks = {}
-
-    def push(d, s):
-        blocks.setdefault(d, []).append(s)
-
-    def process_column(col_lines):
-        current_date = None
-        for raw in col_lines:
-            line = raw.strip()
-            if not line:
-                continue
-
-            dm = re.search(r'(\d{2})\s+(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)', line)
-            if dm:
-                current_date = date(year, MONTHS[dm.group(2)], int(dm.group(1)))
-                push(current_date, line)
-                continue
-
-            if current_date:
-                push(current_date, line)
-
-    left_lines, right_lines = [], []
-    for ln in lines:
-        l, r = split_columns(ln)
-        if l.strip():
-            left_lines.append(l)
-        if r.strip():
-            right_lines.append(r)
-
-    process_column(left_lines)
-    process_column(right_lines)
-
-    return blocks
-
-def pretty_blocks(blocks):
-    out = []
-    for d in sorted(blocks):
-        out.append(d.strftime("%d %b").upper() + ":")
-        for ln in blocks[d]:
-            out.append(f"  {ln}")
-        out.append("")
-    return "\n".join(out).rstrip()
 
 @app.route("/", methods=["GET", "POST"])
 def index():
-    schedule_text = request.form.get("schedule_text", "")
-    action = request.form.get("action", "")
+    base_minutes = 0
+    holiday_minutes = 0
 
-    base = holiday = total = normalized = ""
+    if request.method == "POST":
+        text = request.form.get("schedule_text", "")
+        lines = text.splitlines()
 
-    if request.method == "POST" and schedule_text.strip():
-        lines = schedule_text.splitlines()
-        year = infer_year(schedule_text, default_year=2026)
+        # -------------------------
+        # Base TCRD (known-good)
+        # -------------------------
+        matches = re.findall(r'TCRD\D*(\d{4})', text, re.IGNORECASE)
+        for t in matches:
+            base_minutes += int(t[:2]) * 60 + int(t[2:])
 
-        # Always normalize (so Normalize button shows something, and Calculate can show it too)
-        blocks = build_day_blocks(lines, year)
-        normalized = pretty_blocks(blocks)
+        # -------------------------
+        # Holiday bonus (separate)
+        # -------------------------
+        year = 2026  # PERIOD 0126
+        holiday_dates = set()
+        current_date = None
+        saw_flying = False
 
-        if action == "calculate":
-            # Base TCRD (known-good, layout-agnostic)
-            base_minutes = sum(
-                int(t[:2]) * 60 + int(t[2:])
-                for t in re.findall(r'TCRD\D*(\d{4})', schedule_text, re.IGNORECASE)
+        for line in lines:
+            m = re.search(
+                r'(\d{2})\s+(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)',
+                line
             )
+            if m:
+                if current_date and saw_flying and is_holiday(current_date):
+                    holiday_dates.add(current_date)
 
-            # Holiday bonus = holiday day block that contains any TCRD
-            holiday_days = 0
-            for d, blines in blocks.items():
-                worked = any(re.search(r'TCRD\D*\d{4}', ln, re.IGNORECASE) for ln in blines)
-                if worked and is_holiday(d):
-                    holiday_days += 1
+                current_date = date(year, MONTHS[m.group(2)], int(m.group(1)))
+                saw_flying = False
 
-            holiday_minutes = holiday_days * HOLIDAY_BONUS_MINUTES
-            total_minutes = base_minutes + holiday_minutes
+            if "TCRD" in line.upper():
+                saw_flying = True
 
-            base = f"{base_minutes // 60}:{base_minutes % 60:02d}"
-            holiday = f"{holiday_minutes // 60}:{holiday_minutes % 60:02d}"
-            total = f"{total_minutes // 60}:{total_minutes % 60:02d}"
+        if current_date and saw_flying and is_holiday(current_date):
+            holiday_dates.add(current_date)
+
+        holiday_minutes = len(holiday_dates) * HOLIDAY_BONUS_MINUTES
+
+    total_minutes = base_minutes + holiday_minutes
 
     return render_template(
         "index.html",
-        schedule_text=schedule_text,
-        normalized=normalized,
-        base=base,
-        holiday=holiday,
-        total=total
+        base=f"{base_minutes // 60}:{base_minutes % 60:02d}",
+        holiday=f"{holiday_minutes // 60}:{holiday_minutes % 60:02d}",
+        total=f"{total_minutes // 60}:{total_minutes % 60:02d}"
     )
+
 
 if __name__ == "__main__":
     app.run()
