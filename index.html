@@ -8,16 +8,11 @@
               rows="16"
               cols="80"
               placeholder="Paste your schedule text here..."
-              required>{{ schedule_text }}</textarea>
+              required>{{ request.form.get('schedule_text', '') }}</textarea>
     <br><br>
 
-    <button type="submit" name="action" value="normalize">
-      Normalize
-    </button>
-
-    <button type="submit" name="action" value="calculate">
-      Calculate Trip Credit
-    </button>
+    <button type="submit" name="action" value="normalize">Normalize</button>
+    <button type="submit" name="action" value="calculate">Calculate Trip Credit</button>
   </form>
 
   {% if normalized %}
